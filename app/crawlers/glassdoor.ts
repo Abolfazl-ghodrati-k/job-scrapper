@@ -1,6 +1,6 @@
 import path from "path";
 import { promises as fs } from "fs";
-import pupeteer, { ElementHandle, Page } from "puppeteer";
+import puppeteer, { ElementHandle, Page } from "puppeteer";
 import moment from "moment";
 import LanguageDetect from "languagedetect";
 const storageFolder = `${__dirname}/../storage`;
@@ -11,79 +11,12 @@ import Last from "@/app/models/Last";
 const lngDetector = new LanguageDetect();
 
 var initPage: Page | null = null;
-var browser = null;
 
 const source = "glassdoor";
 const glassdoorURL = "https://www.glassdoor.com";
+const IS_PRODUCTION = process.env.NODE_ENV === "production";
 
 // HELPERS -----------------------------------------------------
-
-async function setCookies(page: Page) {
-  try {
-    const cookiesBuffer = await fs.readFile(
-      path.resolve(storageFolder, "cookies.json")
-    );
-    const cookiesString = cookiesBuffer.toString();
-    const cookiesObj = JSON.parse(cookiesString);
-    await page.setCookie(...cookiesObj);
-    logger(`Cookies file added successfully`);
-  } catch (err) {
-    logger(`Cannot access cookies file`);
-  }
-}
-
-async function setLocalStorage(page: Page) {
-  try {
-    const localStorageBuffer = await fs.readFile(
-      path.resolve(storageFolder, "localStorage.json")
-    );
-    const localStorageString = localStorageBuffer.toString();
-    const localStorageObj = JSON.parse(localStorageString);
-    await page.evaluate((localStorageObj) => {
-      for (const key in localStorageObj) {
-        localStorage.setItem(key, localStorageObj[key]);
-      }
-    }, localStorageObj);
-    console.log(`LocalStorage file added successfully`);
-  } catch {
-    console.log(`Cannot access LocalStorage file`);
-  }
-}
-
-async function saveCookies(page: Page) {
-  const cookies = await page.cookies();
-  await fs.writeFile(
-    path.resolve(storageFolder, "cookies.json"),
-    JSON.stringify(cookies, null, 2)
-  );
-  const localStorageData = await page.evaluate(() =>
-    Object.assign({}, window.localStorage)
-  );
-  await fs.writeFile(
-    path.resolve(storageFolder, "localStorage.json"),
-    JSON.stringify(localStorageData, null, 2)
-  );
-  console.log(`Cookies saved`);
-}
-
-async function checkAcceptCookies(page: Page) {
-  const buttonExists = await page.evaluate((text) => {
-    const button = Array.from(document.getElementsByTagName("button")).find(
-      (b) => b.innerText === text
-    );
-    return !!button;
-  }, "Accept Cookies");
-
-  if (buttonExists) {
-    logger("cookies button watched");
-    await page.evaluate((text) => {
-      const button = Array.from(document.getElementsByTagName("button")).find(
-        (b) => b.innerText === text
-      )!;
-      button.click();
-    }, "Accept Cookies");
-  }
-}
 
 async function isNotLoggedIn(page: Page) {
   const buttonExists = await page.evaluate((text) => {
@@ -110,25 +43,30 @@ type Job = {
 };
 
 const launchBrowser = async () => {
-  logger('Launching Browser')
+  logger("Launching Browser");
 
-  const browser = await pupeteer.launch({
-    headless: false,
-    // executablePath: "/usr/bin/google-chrome",
-  });
+  const browser = IS_PRODUCTION
+    ? // Connect to browserless so we don't run Chrome on the same hardware in production
+      await puppeteer.connect({
+        browserWSEndpoint: `wss://chrome.browserless.io?token=${process.env.BLESS_TOKEN}`,
+      })
+    : // Run the browser locally while in development
+      await puppeteer.launch({
+        headless: false,
+      });
 
   initPage = await browser.newPage();
-  await initPage.setCacheEnabled(false);
+  // await initPage.setCacheEnabled(false);
   logger("Browser Launched Successfully!");
 };
 
 const crawlGlassDoor = async (): Promise<Job[] | undefined> => {
   if (!initPage) {
-    logger('Pupeteer not working')
-    return
-  };
+    logger("Pupeteer not working");
+    return;
+  }
 
-  await setCookies(initPage);
+  // await setCookies(initPage);
 
   let jobs: Job[] = [];
 
@@ -161,7 +99,7 @@ const gotToGlassDoor = async (page: Page) => {
     timeout: 60000,
   }),
     logger("glassdoor opened!");
-  await setLocalStorage(page);
+  // await setLocalStorage(page);
   if (await isNotLoggedIn(page)) {
     logger("Needs to login");
     await login(page);
@@ -170,7 +108,7 @@ const gotToGlassDoor = async (page: Page) => {
 
 async function login(page: Page) {
   //Sometimes need to click on Accept Cookies button
-  await checkAcceptCookies(page);
+  // await checkAcceptCookies(page);
   logger("logging in glassdoor");
 
   await page.click(".email-input");
@@ -197,7 +135,7 @@ async function login(page: Page) {
     'button[data-test="desktop-utility-nav-profile-button"]'
   );
   logger("Sigined In glassdoor successfully");
-  await saveCookies(page);
+  // await saveCookies(page);
 }
 
 async function searchJobs(page: Page, locationId: number) {
@@ -222,7 +160,7 @@ async function parsePageJobs(page: Page, country: string) {
   for (const listItem of listItems) {
     // await listItem.click()
     const { location, url, company, title } = await listItem.evaluate(
-      (element: HTMLElement) => {
+      (element: Element) => {
         return {
           location: element.querySelector('[data-test="emp-location"]')
             ?.textContent,
@@ -241,8 +179,6 @@ async function parsePageJobs(page: Page, country: string) {
       }
     );
 
-    logger(JSON.stringify({ location, url, company, title }));
-
     const guid = company + title;
     const exist = await Last.findOne({
       where: source,
@@ -255,9 +191,12 @@ async function parsePageJobs(page: Page, country: string) {
         guid: guid,
       }).save();
 
-      const { content, isEnglish, fullContent } = await getJobContent(listItem);
+      const { content, isEnglish } = await getJobContent(
+        page,
+        listItem
+      );
       if (isEnglish) {
-        jobs.push({
+        const foundJob = {
           location: `${country}-${location}`,
           url: `${glassdoorURL}${url}`,
           company,
@@ -265,9 +204,10 @@ async function parsePageJobs(page: Page, country: string) {
           content: content,
           when: today,
           source,
-          hashtags: getHashtags(fullContent),
+          hashtags: getHashtags(content),
           options: null,
-        });
+        };
+        jobs.push(foundJob);
       }
     }
     await sleep(3000);
@@ -276,14 +216,23 @@ async function parsePageJobs(page: Page, country: string) {
   return jobs;
 }
 
-async function getJobContent(item: ElementHandle<HTMLLIElement>) {
+async function getJobContent(
+  page: Page,
+  item: ElementHandle<SVGElement | HTMLElement>
+) {
   await item.click();
   // logger(`here is the page url: ${page.url()}`)
-  let content = "this is a bomb, take care";
+  // let content = "this is a bomb, take care";
+  await page.waitForSelector(".JobDetails_jobDescription__6VeBn");
+
+  const contentTag = await page.$(".JobDetails_jobDescription__6VeBn");
+
+  const content =
+    (await contentTag?.evaluate((element: Element) => element?.textContent)) ||
+    "no content found on this job position";
 
   return {
-    content: content.slice(0, 150) + "...",
-    fullContent: content,
+    content,
     isEnglish:
       lngDetector.detect(content, 1).length > 0
         ? lngDetector.detect(content, 1)[0][0] == "english"
