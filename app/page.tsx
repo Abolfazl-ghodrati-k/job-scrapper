@@ -1,8 +1,20 @@
+import { GetAll } from "./api/crawl/AIO";
+import { launchBrowser } from "./crawlers/glassdoor";
+import { connect } from "./utils/db";
+import { logger } from "./utils/logger";
+
 async function runCrawler() {
-  const res = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL}/api/crawl`, { next: { revalidate: 0 } });
-  const response = await res.json();
-  console.log(response)
+  await launchBrowser();
+  await connect();
+
+  if (process.env.UPDATE_DB === "true") {
+    const result = await GetAll();
+    logger("DB Update has finished successfully, results:");
+    logger(JSON.stringify(result));
+  }
 }
+
+export const dynamic = 'force-dynamic';
 
 export default async function Home() {
   await runCrawler();

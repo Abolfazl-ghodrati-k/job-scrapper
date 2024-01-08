@@ -3,6 +3,7 @@ import { connect } from "@/app/utils/db";
 import { logger } from "@/app/utils/logger";
 import { GetAll } from "./AIO";
 
+export const dynamic = 'force-dynamic'
 export async function GET(request: Request) {
   await launchBrowser();
   await connect();
