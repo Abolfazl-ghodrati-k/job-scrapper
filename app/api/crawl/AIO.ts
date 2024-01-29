@@ -6,10 +6,12 @@ const GetAll = async () => {
   const promises = [crawlGlassDoor()];
   try {
     let result = await Promise.all(promises);
+    
     return result;
   } catch (error) {
     logger(JSON.stringify(error));
   }
 };
+
 
 export { GetAll }

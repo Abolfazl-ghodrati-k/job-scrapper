@@ -15,6 +15,6 @@ const LastSchema = new mongoose.Schema({
     }
 });
 
-const Last = mongoose.model("Last", LastSchema);
+const Last = mongoose.models.Last || mongoose.model("Last", LastSchema);
 
 export default Last
