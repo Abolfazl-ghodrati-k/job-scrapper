@@ -4,9 +4,10 @@ import { launchBrowser } from "../crawlers/glassdoor";
 import { connect } from "./db";
 import { GetAll } from "../api/crawl/AIO";
 import { logger } from "./logger";
-// import tunnerl from 'tunnel'
-// const Proxy = require('../models/Proxy');
-// const { default: axios } = require('axios');
+import tunnel from "tunnel";
+import Proxy from "../models/Proxy";
+import axios from "axios";
+import { Agent } from "http";
 
 const getHashtags = (jobDescription: string) => {
   const languagesAndTechnologies = {
@@ -91,23 +92,14 @@ const convertStringToDateTime = (relativeTime: string) => {
   }
 };
 
-const saveToDataBase = async (result: JobDoc[][]) => {
-  const jobsToSave: JobDoc[] = result.flat().map((job) => ({
-    location: job.location,
-    url: job.url,
-    company: job.company,
-    title: job.title,
-    content: job.content,
-    when: job.when,
-    source: job.source,
-    hashtags: job.hashtags,
-  }));
+const saveJobToDataBase = async (result: JobDoc) => {
+  const jobsToSave: JobDoc = { ...result };
 
   try {
-    const savedJobs = await JobModel.insertMany(jobsToSave);
-    console.log("Jobs saved to database:", savedJobs);
+    const savedJob = await JobModel.create(jobsToSave);
+    logger(`Jobs saved to database: ${savedJob}`);
   } catch (error) {
-    console.error("Error saving jobs to database:", error);
+    logger(`Error saving jobs to database: ${error} `);
   }
 };
 
@@ -147,82 +139,89 @@ const locations = [
 ];
 
 const runCrawler = async () => {
-  await launchBrowser();
   await connect();
 
   if (process.env.UPDATE_DB === "true") {
-    const result = await GetAll();
-    logger("DB Update has finished successfully, results:");
-    if (result && result.length > 0) {
-      if (result[0].length > 0) {
-        saveToDataBase(result);
-      }
-    } else {
-      logger("NO Jobs Found, im going home.");
-    }
+    await GetAll();
+    logger("DB Update has finished successfully");
   }
 };
 
-// const getTunnelProxy = async (_proxy) => {
-//     let proxy = _proxy || await getRandomProxy();
-//     let tunnelingAgent = tunnel.httpsOverHttp({
-//         proxy: {
-//             host: proxy.ip,
-//             port: proxy.port,
-//             proxyAuth: `${proxy.username}:${proxy.password}`,
-//             headers: {
-//                 'User-Agent': 'Node'
-//             }
-//         }
-//     });
+const getTunnelProxy = async (_proxy?: any) => {
+  let proxy = _proxy || (await getRandomProxy());
+  if(proxy) {
+    let tunnelingAgent = tunnel.httpsOverHttp({
+      proxy: {
+        host: proxy.ip,
+        port: proxy.port,
+        proxyAuth: `${proxy?.username}:${proxy?.password}`,
+        headers: {
+          "User-Agent": "Node",
+        },
+      },
+    });
+  
+    return tunnelingAgent;
+  }
+   logger("No proxy found - im going home!")
+};
 
-//     return tunnelingAgent;
-// }
+const getRandomProxy = async (): Promise<{ host: string; port: number }> => {
+  let [proxy] = await Proxy.aggregate([
+    // { $match: { "enabled": 1 } },
+    { $sample: { size: 1 } },
+  ]);
 
-// const getRandomProxy = async () => {
-//     let [proxy] = await Proxy.aggregate([
-//         // { $match: { "enabled": 1 } },
-//         { $sample: { size: 1 } }
-//     ]);
+  if (!(await checkProxy(proxy))) {
+    logger(`proxy ${proxy.ip}:${proxy.port} didnt worked trying something else...`)
+    return await getRandomProxy();
+  }
 
-//     if (!(await checkProxy(proxy))) {
-//         return await getRandomProxy();
-//     }
+  logger(`Proxy ${proxy.ip}:${proxy.port} connected successfully`)
 
-//     return proxy;
-// }
+  return proxy;
+};
 
-// const checkProxy = async (proxy) => {
-//     var tunnelingAgent = tunnel.httpsOverHttp({
-//         proxy: {
-//             host: proxy.ip,
-//             port: proxy.port,
-//             proxyAuth: `${proxy.username}:${proxy.password}`,
-//             headers: {
-//                 'User-Agent': 'Node'
-//             }
-//         }
-//     });
+const checkProxy = async (proxy?: {
+  ip: any;
+  port: any;
+  username: any;
+  password: any;
+}) => {
+  let tunnelingAgent: Agent
+  if (proxy) {
+   tunnelingAgent = tunnel.httpsOverHttp({
+      proxy: {
+        host: proxy.ip,
+        port: proxy.port,
+        proxyAuth: `${proxy.username}:${proxy.password}`,
+        headers: {
+          "User-Agent": "Node",
+        },
+      },
+    });
 
-//     try {
-//         await axios.get('https://www.linkedin.com', {
-//             proxy: false,
-//             httpsAgent: tunnelingAgent
-//         })
-//     } catch (error) {
-//         return false;
-//     }
+    try {
+      await axios.get("https://www.linkedin.com", {
+        proxy: false,
+        httpsAgent: tunnelingAgent,
+      });
+    } catch (error) {
+      return false;
+    }
+  }
 
-//     return true;
-// }
+
+  return true;
+};
 
 export {
   getHashtags,
   sleep,
   convertStringToDateTime,
-  saveToDataBase,
+  saveJobToDataBase,
   locations,
-  runCrawler
-  // getTunnelProxy,
-  // getRandomProxy
+  runCrawler,
+  getTunnelProxy,
+  getRandomProxy,
 };

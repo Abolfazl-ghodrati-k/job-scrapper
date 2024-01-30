@@ -1,15 +1,19 @@
+import { crawlGitLab } from "@/app/crawlers/gitlab";
 import { crawlGlassDoor } from "@/app/crawlers/glassdoor";
+import linkedIn from "@/app/crawlers/linkedin";
 import { logger } from "@/app/utils/logger";
 import moment from "moment";
 
 const GetAll = async () => {
-  const promises = [crawlGlassDoor()];
+  const promises = [
+    // crawlGlassDoor(),
+    // linkedIn("React%Remote"),
+    crawlGitLab(["Front End", "React", "Nextjs", "TypeScript", "Front-End", "frontend"])
+  ];
   try {
-    let result = await Promise.all(promises);
-    
-    return result;
+    await Promise.all(promises);
   } catch (error) {
-    logger(JSON.stringify(error));
+    console.log(error)
   }
 };
 
